@@ -227,6 +227,109 @@ class Daily_Registration_Monitor {
 	}
 
 	/**
+	 * Retrieve custom BuddyBoss profile fields and common social/location/bio fields.
+	 *
+	 * @param int $user_id User ID.
+	 * @return array
+	 */
+	public function get_buddyboss_custom_fields( $user_id ) {
+		$user_id = (int) $user_id;
+		$fields = array(
+			'facebook'  => '',
+			'twitter'   => '',
+			'instagram' => '',
+			'location'  => '',
+			'bio'       => '',
+		);
+
+		// Try xProfile fields by common names.
+		if ( function_exists( 'bp_is_active' ) && bp_is_active( 'xprofile' ) && function_exists( 'xprofile_get_field_data' ) ) {
+			$map = array(
+				'facebook'  => array( 'Facebook', 'facebook', 'Facebook URL' ),
+				'twitter'   => array( 'Twitter', 'twitter', 'Twitter URL' ),
+				'instagram' => array( 'Instagram', 'instagram', 'Instagram URL' ),
+				'location'  => array( 'Location', 'City', 'Country' ),
+				'bio'       => array( 'Bio', 'About', 'About Me' ),
+			);
+			foreach ( $map as $key => $labels ) {
+				foreach ( $labels as $label ) {
+					$value = xprofile_get_field_data( $label, $user_id );
+					if ( is_string( $value ) && '' !== $value ) {
+						$fields[ $key ] = $value;
+						break;
+					}
+				}
+			}
+		}
+
+		return $fields;
+	}
+
+	/**
+	 * Get basic verification details: status, date, and optional level.
+	 *
+	 * @param int $user_id User ID.
+	 * @return array{status:bool,date:string,level:string}
+	 */
+	public function get_verification_details( $user_id ) {
+		$user_id = (int) $user_id;
+		$status  = $this->check_verified_status( $user_id );
+		$date    = (string) get_user_meta( $user_id, 'verified_date', true );
+		$level   = (string) get_user_meta( $user_id, 'verified_level', true );
+		return array(
+			'status' => (bool) $status,
+			'date'   => $date,
+			'level'  => $level,
+		);
+	}
+
+	/**
+	 * Attempt to fetch recent BuddyBoss activity entries for a user.
+	 *
+	 * @param int $user_id User ID.
+	 * @param int $limit   Number of entries.
+	 * @return array Array of associative arrays with 'content' and 'date'.
+	 */
+	public function get_buddyboss_activity( $user_id, $limit = 5 ) {
+		$user_id = (int) $user_id;
+		$items = array();
+		if ( function_exists( 'bp_is_active' ) && bp_is_active( 'activity' ) && function_exists( 'bp_activity_get' ) ) {
+			$args = array(
+				'user_id' => $user_id,
+				'per_page' => max( 1, (int) $limit ),
+				'sort' => 'DESC',
+			);
+			$result = bp_activity_get( $args );
+			if ( is_array( $result ) && ! empty( $result['activities'] ) ) {
+				foreach ( $result['activities'] as $act ) {
+					$items[] = array(
+						'content' => wp_strip_all_tags( (string) ( $act->content ?? '' ) ),
+						'date'    => (string) ( $act->date_recorded ?? '' ),
+					);
+				}
+			}
+		}
+		return $items;
+	}
+
+	/**
+	 * Unverify a user by clearing common verification meta keys.
+	 *
+	 * @param int $user_id User ID.
+	 * @return void
+	 */
+	public function unverify_user( $user_id ) {
+		$user_id = (int) $user_id;
+		$keys = array( 'bp_verified', 'verified_member', 'is_verified', 'bp_verified_member', 'bb_verified' );
+		foreach ( $keys as $key ) {
+			delete_user_meta( $user_id, $key );
+		}
+		delete_user_meta( $user_id, 'verified_date' );
+		delete_user_meta( $user_id, 'verified_level' );
+		$this->clear_cache( $user_id );
+	}
+
+	/**
 	 * Check if the user has a Verified Members badge.
 	 *
 	 * This checks several plausible meta keys used by verified member plugins.

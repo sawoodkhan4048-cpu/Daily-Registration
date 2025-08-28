@@ -28,6 +28,9 @@ define( 'DRM_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
  */
 function drm_activate() {
 	// Reserved for future use (e.g., scheduled hooks). No DB schema required.
+	if ( class_exists( 'DRM_Notifications' ) ) {
+		DRM_Notifications::schedule_daily_event();
+	}
 }
 
 /**
@@ -37,6 +40,9 @@ function drm_activate() {
  */
 function drm_deactivate() {
 	// Reserved for future use (e.g., unschedule hooks).
+	if ( class_exists( 'DRM_Notifications' ) ) {
+		DRM_Notifications::clear_scheduled_event();
+	}
 }
 
 register_activation_hook( DRM_PLUGIN_FILE, 'drm_activate' );
@@ -53,14 +59,23 @@ function drm_init_plugin() {
 
 	// Load core class.
 	require_once DRM_PLUGIN_DIR . 'includes/class-daily-registration-monitor.php';
+	require_once DRM_PLUGIN_DIR . 'includes/class-dashboard-widget.php';
+	require_once DRM_PLUGIN_DIR . 'includes/class-export.php';
+	require_once DRM_PLUGIN_DIR . 'includes/class-notifications.php';
 
 	// Initialize core and expose via global for convenience.
 	$GLOBALS['drm_plugin'] = new Daily_Registration_Monitor();
+	// Init helpers.
+	new DRM_Dashboard_Widget( $GLOBALS['drm_plugin'] );
+	$GLOBALS['drm_export'] = new DRM_Export_Handler( $GLOBALS['drm_plugin'] );
+	new DRM_Notifications( $GLOBALS['drm_plugin'] );
 
 	// Load admin functionality.
 	if ( is_admin() ) {
 		require_once DRM_PLUGIN_DIR . 'admin/class-admin-page.php';
+		require_once DRM_PLUGIN_DIR . 'admin/class-settings.php';
 		new DRM_Admin_Page( $GLOBALS['drm_plugin'] );
+		new DRM_Settings_Page();
 	}
 }
 add_action( 'init', 'drm_init_plugin' );
