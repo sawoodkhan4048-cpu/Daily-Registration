@@ -19,7 +19,7 @@ class Daily_Registration_Monitor {
 	 *
 	 * @var int
 	 */
-	const CACHE_TTL = 300; // 5 minutes.
+	const CACHE_TTL = 900; // 15 minutes.
 
 	/**
 	 * Constructor.
@@ -132,9 +132,10 @@ class Daily_Registration_Monitor {
 
 		global $wpdb;
 		$table = $wpdb->users;
-		$sql   = "SELECT * FROM {$table} WHERE DATE(user_registered) = CURDATE() ORDER BY user_registered DESC";
+		$date  = current_time( 'Y-m-d' );
+		$sql   = $wpdb->prepare( "SELECT * FROM {$table} WHERE DATE(user_registered) = %s ORDER BY user_registered DESC", $date );
 
-		$rows = $wpdb->get_results( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$rows = $wpdb->get_results( $sql );
 		if ( null === $rows ) {
 			$this->log_error( 'Database error in get_todays_registrations: ' . (string) $wpdb->last_error );
 			$rows = array();
@@ -176,6 +177,11 @@ class Daily_Registration_Monitor {
 	 */
 	public function get_buddyboss_profile_data( $user_id ) {
 		$user_id = (int) $user_id;
+		$key     = $this->build_today_key( 'bb_profile_' . $user_id );
+		$cached  = get_transient( $key );
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
 		$user    = get_user_by( 'id', $user_id );
 
 		$first_name = get_user_meta( $user_id, 'first_name', true );
@@ -216,7 +222,7 @@ class Daily_Registration_Monitor {
 			}
 		}
 
-		return array(
+		$data = array(
 			'first_name'  => is_string( $first_name ) ? $first_name : '',
 			'last_name'   => is_string( $last_name ) ? $last_name : '',
 			'user_email'  => $email,
@@ -224,6 +230,8 @@ class Daily_Registration_Monitor {
 			'avatar_url'  => $avatar_url,
 			'member_type' => $member_type,
 		);
+		set_transient( $key, $data, self::CACHE_TTL );
+		return $data;
 	}
 
 	/**
@@ -234,6 +242,11 @@ class Daily_Registration_Monitor {
 	 */
 	public function get_buddyboss_custom_fields( $user_id ) {
 		$user_id = (int) $user_id;
+		$key     = $this->build_today_key( 'bb_custom_' . $user_id );
+		$cached  = get_transient( $key );
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
 		$fields = array(
 			'facebook'  => '',
 			'twitter'   => '',
@@ -262,6 +275,7 @@ class Daily_Registration_Monitor {
 			}
 		}
 
+		set_transient( $key, $fields, self::CACHE_TTL );
 		return $fields;
 	}
 
@@ -432,8 +446,9 @@ class Daily_Registration_Monitor {
 
 		global $wpdb;
 		$table = $wpdb->users;
-		$sql   = "SELECT COUNT(*) FROM {$table} WHERE DATE(user_registered) = CURDATE()";
-		$count = (int) $wpdb->get_var( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$date  = current_time( 'Y-m-d' );
+		$sql   = $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE DATE(user_registered) = %s", $date );
+		$count = (int) $wpdb->get_var( $sql );
 		if ( null === $count ) {
 			$this->log_error( 'Database error in get_registration_count_today: ' . (string) $wpdb->last_error );
 			$count = 0;

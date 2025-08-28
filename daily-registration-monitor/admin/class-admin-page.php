@@ -87,8 +87,10 @@ class DRM_Admin_Page {
 			return;
 		}
 
-		wp_enqueue_style( 'drm-admin-style', DRM_PLUGIN_URL . 'assets/css/admin-style.css', array(), DRM_VERSION );
-		wp_enqueue_script( 'drm-admin-script', DRM_PLUGIN_URL . 'assets/js/admin-script.js', array( 'jquery' ), DRM_VERSION, true );
+		$css_file = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? 'admin-style.css' : 'admin-style.min.css';
+		$js_file  = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? 'admin-script.js' : 'admin-script.min.js';
+		wp_enqueue_style( 'drm-admin-style', DRM_PLUGIN_URL . 'assets/css/' . $css_file, array(), DRM_VERSION );
+		wp_enqueue_script( 'drm-admin-script', DRM_PLUGIN_URL . 'assets/js/' . $js_file, array( 'jquery' ), DRM_VERSION, true );
 		wp_localize_script( 'drm-admin-script', 'DRM_Admin', array(
 			'ajax_url'   => admin_url( 'admin-ajax.php' ),
 			'nonce'      => wp_create_nonce( 'drm_admin_nonce' ),
@@ -354,7 +356,12 @@ class DRM_Admin_Page {
 	public function ajax_fetch() {
 		check_ajax_referer( 'drm_admin_nonce', 'nonce' );
 		if ( ! current_user_can( 'manage_options' ) ) {
+			if ( class_exists( 'DRM_Logger' ) ) { DRM_Logger::log( 'Unauthorized fetch attempt', 'warning' ); }
 			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'daily-registration-monitor' ) ), 403 );
+		}
+
+		if ( ! $this->rate_limit_ok( 'fetch', 1 ) ) {
+			wp_send_json_error( array( 'message' => __( 'Too many requests', 'daily-registration-monitor' ) ), 429 );
 		}
 
 		$search = isset( $_POST['s'] ) ? sanitize_text_field( wp_unslash( $_POST['s'] ) ) : '';
@@ -385,7 +392,12 @@ class DRM_Admin_Page {
 	public function ajax_verify_member() {
 		check_ajax_referer( 'drm_admin_nonce', 'nonce' );
 		if ( ! current_user_can( 'manage_options' ) ) {
+			if ( class_exists( 'DRM_Logger' ) ) { DRM_Logger::log( 'Unauthorized verify attempt', 'warning' ); }
 			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'daily-registration-monitor' ) ), 403 );
+		}
+
+		if ( ! $this->rate_limit_ok( 'verify', 1 ) ) {
+			wp_send_json_error( array( 'message' => __( 'Too many requests', 'daily-registration-monitor' ) ), 429 );
 		}
 		$user_id = isset( $_POST['user_id'] ) ? (int) $_POST['user_id'] : 0;
 		if ( $user_id <= 0 ) {
@@ -396,9 +408,30 @@ class DRM_Admin_Page {
 		update_user_meta( $user_id, 'verified_member', '1' );
 		// Also set alternative keys for compatibility.
 		update_user_meta( $user_id, 'bp_verified', '1' );
+		update_user_meta( $user_id, 'verified_date', current_time( 'mysql' ) );
 
 		$this->core->clear_cache( $user_id );
 		wp_send_json_success( array( 'user_id' => $user_id, 'verified' => true ) );
+	}
+
+	/**
+	 * Simple per-user rate limiting helper.
+	 *
+	 * @param string $action Action key.
+	 * @param int    $seconds Minimum seconds between calls.
+	 * @return bool
+	 */
+	protected function rate_limit_ok( $action, $seconds ) {
+		$user_id = get_current_user_id();
+		$key = 'drm_rl_' . md5( $action . '|' . (int) $user_id );
+		$last = get_transient( $key );
+		$now  = time();
+		if ( $last && ( $now - (int) $last ) < max( 1, (int) $seconds ) ) {
+			if ( class_exists( 'DRM_Logger' ) ) { DRM_Logger::log( 'Rate limit triggered for ' . $action . ' by user ' . (int) $user_id, 'warning' ); }
+			return false;
+		}
+		set_transient( $key, $now, $seconds );
+		return true;
 	}
 
 	/**
