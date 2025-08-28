@@ -49,6 +49,7 @@ class DRM_Admin_Page {
 		// AJAX endpoints.
 		add_action( 'wp_ajax_drm_fetch', array( $this, 'ajax_fetch' ) );
 		add_action( 'wp_ajax_drm_verify_member', array( $this, 'ajax_verify_member' ) );
+		add_action( 'wp_ajax_drm_export_csv', array( $this, 'ajax_export_csv' ) );
 
 		// CSV export via admin-post.
 		add_action( 'admin_post_drm_export_csv', array( $this, 'handle_export_csv' ) );
@@ -87,8 +88,8 @@ class DRM_Admin_Page {
 		}
 
 		wp_enqueue_style( 'drm-admin-style', DRM_PLUGIN_URL . 'assets/css/admin-style.css', array(), DRM_VERSION );
-		wp_enqueue_script( 'drm-admin-js', DRM_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), DRM_VERSION, true );
-		wp_localize_script( 'drm-admin-js', 'DRM_Admin', array(
+		wp_enqueue_script( 'drm-admin-script', DRM_PLUGIN_URL . 'assets/js/admin-script.js', array( 'jquery' ), DRM_VERSION, true );
+		wp_localize_script( 'drm-admin-script', 'DRM_Admin', array(
 			'ajax_url'   => admin_url( 'admin-ajax.php' ),
 			'nonce'      => wp_create_nonce( 'drm_admin_nonce' ),
 			'per_page'   => (int) $this->per_page,
@@ -96,6 +97,9 @@ class DRM_Admin_Page {
 				'confirmVerify' => __( 'Verify this member?', 'daily-registration-monitor' ),
 				'loading'       => __( 'Loading…', 'daily-registration-monitor' ),
 				'noResults'     => __( 'No matching results.', 'daily-registration-monitor' ),
+				'exporting'     => __( 'Preparing CSV…', 'daily-registration-monitor' ),
+				'exportError'   => __( 'Export failed. Please try again.', 'daily-registration-monitor' ),
+				'exportDone'    => __( 'Export ready.', 'daily-registration-monitor' ),
 			),
 		) );
 	}
@@ -120,10 +124,11 @@ class DRM_Admin_Page {
 
 		// Initial dataset (server-side) for no-JS fallback.
 		$rows = $this->core->get_todays_registrations();
-		$search_query = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
-		$page         = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1;
-		$filtered     = $this->filter_rows( $rows, $search_query );
-		$paginated    = $this->paginate_rows( $filtered, $page, $this->per_page );
+		$search_query  = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
+		$status_filter = isset( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
+		$page          = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1;
+		$filtered      = $this->filter_rows( $rows, $search_query, $status_filter );
+		$paginated     = $this->paginate_rows( $filtered, $page, $this->per_page );
 		?>
 		<div class="wrap">
 			<h1 class="wp-heading-inline"><?php echo esc_html__( "Today's Registrations", 'daily-registration-monitor' ); ?></h1>
@@ -138,9 +143,9 @@ class DRM_Admin_Page {
 					<form class="drm-export-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 						<input type="hidden" name="action" value="drm_export_csv" />
 						<input type="hidden" name="<?php echo esc_attr( $nonce_field ); ?>" value="<?php echo esc_attr( $nonce ); ?>" />
-						<button type="submit" class="button button-secondary"><?php echo esc_html__( 'Export All (CSV)', 'daily-registration-monitor' ); ?></button>
+						<button type="submit" class="button button-secondary"><span class="dashicons dashicons-download"></span> <?php echo esc_html__( 'Export All (CSV)', 'daily-registration-monitor' ); ?></button>
 					</form>
-					<button type="button" class="button button-primary drm-refresh"><?php echo esc_html__( 'Refresh', 'daily-registration-monitor' ); ?></button>
+					<button type="button" class="button button-primary drm-refresh"><span class="dashicons dashicons-update"></span> <?php echo esc_html__( 'Refresh', 'daily-registration-monitor' ); ?></button>
 				</div>
 			</div>
 
@@ -150,13 +155,19 @@ class DRM_Admin_Page {
 					<p class="search-box">
 						<label class="screen-reader-text" for="drm-search-input"><?php echo esc_html__( 'Search members:', 'daily-registration-monitor' ); ?></label>
 						<input type="search" id="drm-search-input" name="s" value="<?php echo esc_attr( $search_query ); ?>" />
+						<select id="drm-status-filter" name="status">
+							<option value="" <?php selected( '', $status_filter ); ?>><?php echo esc_html__( 'All', 'daily-registration-monitor' ); ?></option>
+							<option value="verified" <?php selected( 'verified', $status_filter ); ?>><?php echo esc_html__( 'Verified', 'daily-registration-monitor' ); ?></option>
+							<option value="unverified" <?php selected( 'unverified', $status_filter ); ?>><?php echo esc_html__( 'Unverified', 'daily-registration-monitor' ); ?></option>
+						</select>
 						<input type="submit" id="search-submit" class="button" value="<?php echo esc_attr__( 'Search', 'daily-registration-monitor' ); ?>">
+						<button type="button" id="drm-clear-search" class="button"><?php echo esc_html__( 'Clear', 'daily-registration-monitor' ); ?></button>
 					</p>
 				</form>
 			</div>
 
 			<div class="drm-table-container">
-				<table class="wp-list-table widefat fixed striped drm-list">
+				<table class="wp-list-table widefat fixed striped drm-list drm-registrations-table">
 					<thead>
 						<tr>
 							<th class="column-avatar">&nbsp;</th>
@@ -199,33 +210,45 @@ class DRM_Admin_Page {
 	 *
 	 * @param array  $rows Rows from users table.
 	 * @param string $search Search query.
+	 * @param string $status Status filter.
 	 * @return array Filtered rows.
 	 */
-	protected function filter_rows( $rows, $search ) {
+	protected function filter_rows( $rows, $search, $status = '' ) {
 		$search = is_string( $search ) ? trim( $search ) : '';
 		if ( '' === $search ) {
-			return $rows;
-		}
-		$search_l = mb_strtolower( $search );
-		$out = array();
-		foreach ( (array) $rows as $row ) {
-			$user = get_user_by( 'id', (int) $row->ID );
-			if ( ! ( $user instanceof WP_User ) ) {
-				continue;
+			$filtered = $rows;
+		} else {
+			$search_l = mb_strtolower( $search );
+			$filtered = array();
+			foreach ( (array) $rows as $row ) {
+				$user = get_user_by( 'id', (int) $row->ID );
+				if ( ! ( $user instanceof WP_User ) ) {
+					continue;
+				}
+				$bb   = $this->core->get_buddyboss_profile_data( (int) $row->ID );
+				$hay  = mb_strtolower( implode( ' ', array(
+					(string) $user->user_login,
+					(string) $user->user_email,
+					(string) $user->display_name,
+					(string) ( $bb['first_name'] ?? '' ),
+					(string) ( $bb['last_name'] ?? '' ),
+				) ) );
+				if ( false !== mb_strpos( $hay, $search_l ) ) {
+					$filtered[] = $row;
+				}
 			}
-			$bb   = $this->core->get_buddyboss_profile_data( (int) $row->ID );
-			$hay  = mb_strtolower( implode( ' ', array(
-				(string) $user->user_login,
-				(string) $user->user_email,
-				(string) $user->display_name,
-				(string) ( $bb['first_name'] ?? '' ),
-				(string) ( $bb['last_name'] ?? '' ),
-			) ) );
-			if ( false !== mb_strpos( $hay, $search_l ) ) {
-				$out[] = $row;
-			}
 		}
-		return $out;
+
+		// Status filter.
+		$status = sanitize_key( (string) $status );
+		if ( 'verified' === $status || 'unverified' === $status ) {
+			$filtered = array_values( array_filter( (array) $filtered, function( $r ) use ( $status ) {
+				$flag = $this->core->check_verified_status( (int) $r->ID );
+				return 'verified' === $status ? $flag : ! $flag;
+			} ) );
+		}
+
+		return $filtered;
 	}
 
 	/**
@@ -276,21 +299,23 @@ class DRM_Admin_Page {
 			}
 
 			$out .= '<tr>';
-			$out .= '<td class="column-avatar"><img alt="" src="' . esc_url( $avatar ) . '" class="drm-avatar" /></td>';
-			$out .= '<td class="column-fullname"><strong><a href="' . esc_url( $profile ) . '">' . esc_html( $full ) . '</a></strong></td>';
+			$out .= '<td class="column-avatar"><img alt="" loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="' . esc_url( $avatar ) . '" class="drm-avatar" /></td>';
+			$out .= '<td class="column-fullname"><strong><a href="' . esc_url( $profile ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $full ) . '</a></strong></td>';
 			$out .= '<td class="column-username">' . esc_html( (string) ( $data['user_login'] ?? '' ) ) . '</td>';
 			$out .= '<td class="column-email"><a href="mailto:' . esc_attr( (string) ( $data['user_email'] ?? '' ) ) . '">' . esc_html( (string) ( $data['user_email'] ?? '' ) ) . '</a></td>';
 			$out .= '<td class="column-role">' . esc_html( (string) $role ) . '</td>';
 			$out .= '<td class="column-registered">' . esc_html( (string) $reg_h ) . '</td>';
 			$out .= '<td class="column-verified">' . ( $verified ? '<span class="drm-badge drm-badge--success">' . esc_html__( 'Verified', 'daily-registration-monitor' ) . '</span>' : '<span class="drm-badge">' . esc_html__( 'Not Verified', 'daily-registration-monitor' ) . '</span>' ) . '</td>';
 			$out .= '<td class="column-actions">';
-			$out .= '<a class="button button-small" href="' . esc_url( $profile ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'View Profile', 'daily-registration-monitor' ) . '</a> ';
+			$out .= '<div class="drm-actions button-group">';
+			$out .= '<a class="button button-small" href="' . esc_url( $profile ) . '" target="_blank" rel="noopener noreferrer"><span class="dashicons dashicons-admin-users"></span> ' . esc_html__( 'View Profile', 'daily-registration-monitor' ) . '</a> ';
 			if ( ! $verified ) {
-				$out .= '<button type="button" class="button button-small drm-verify" data-user-id="' . (int) $user_id . '">' . esc_html__( 'Verify', 'daily-registration-monitor' ) . '</button> ';
+				$out .= '<button type="button" class="button button-small drm-verify" data-user-id="' . (int) $user_id . '"><span class="dashicons dashicons-yes"></span> ' . esc_html__( 'Verify', 'daily-registration-monitor' ) . '</button> ';
 			}
 			if ( ! empty( $message_url ) ) {
-				$out .= '<a class="button button-small" href="' . esc_url( $message_url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Message', 'daily-registration-monitor' ) . '</a> ';
+				$out .= '<a class="button button-small" href="' . esc_url( $message_url ) . '" target="_blank" rel="noopener noreferrer"><span class="dashicons dashicons-email"></span> ' . esc_html__( 'Message', 'daily-registration-monitor' ) . '</a> ';
 			}
+			$out .= '</div>';
 			$out .= '</td>';
 			$out .= '</tr>';
 		}
@@ -333,9 +358,10 @@ class DRM_Admin_Page {
 		}
 
 		$search = isset( $_POST['s'] ) ? sanitize_text_field( wp_unslash( $_POST['s'] ) ) : '';
+		$status = isset( $_POST['status'] ) ? sanitize_key( wp_unslash( $_POST['status'] ) ) : '';
 		$page   = isset( $_POST['page'] ) ? max( 1, (int) $_POST['page'] ) : 1;
 		$rows   = $this->core->get_todays_registrations();
-		$filtered  = $this->filter_rows( $rows, $search );
+		$filtered  = $this->filter_rows( $rows, $search, $status );
 		$paginated = $this->paginate_rows( $filtered, $page, $this->per_page );
 
 		$table_rows_html = $this->render_table_rows( $paginated['items'] );
@@ -413,6 +439,46 @@ class DRM_Admin_Page {
 		}
 		fclose( $fh );
 		exit;
+	}
+
+	/**
+	 * AJAX: Export CSV and return as base64 for download.
+	 *
+	 * @return void
+	 */
+	public function ajax_export_csv() {
+		check_ajax_referer( 'drm_admin_nonce', 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'daily-registration-monitor' ) ), 403 );
+		}
+
+		$rows = $this->core->get_todays_registrations();
+		$fh   = fopen( 'php://temp', 'w+' );
+		fputcsv( $fh, array( 'User ID', 'Full Name', 'Username', 'Email', 'Role', 'Registered', 'Verified' ) );
+		foreach ( (array) $rows as $row ) {
+			$user_id = (int) $row->ID;
+			$data    = $this->core->prepare_user_display_data( $user_id );
+			$full    = trim( ( $data['first_name'] ?? '' ) . ' ' . ( $data['last_name'] ?? '' ) );
+			$full    = $full ?: ( $data['display_name'] ?? '' );
+			fputcsv( $fh, array(
+				$user_id,
+				$full,
+				(string) ( $data['user_login'] ?? '' ),
+				(string) ( $data['user_email'] ?? '' ),
+				(string) ( $data['role'] ?? '' ),
+				(string) ( $data['registered_h'] ?? '' ),
+				! empty( $data['verified'] ) ? 'Yes' : 'No',
+			) );
+		}
+		rewind( $fh );
+		$csv = stream_get_contents( $fh );
+		fclose( $fh );
+
+		$filename = 'todays-registrations-' . date_i18n( 'Ymd-His', current_time( 'timestamp' ) ) . '.csv';
+		wp_send_json_success( array(
+			'filename'   => $filename,
+			'csv_base64' => base64_encode( (string) $csv ),
+		) );
 	}
 }
 

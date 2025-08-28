@@ -22,6 +22,18 @@
 	color: #fff;
 }
 
+/* Table styling */
+.drm-registrations-table tr:hover {
+	background: #f6f7f7;
+}
+
+.drm-registrations-table td,
+.drm-registrations-table th {
+	vertical-align: middle;
+	padding-top: 10px;
+	padding-bottom: 10px;
+}
+
 .drm-header {
 	display: flex;
 	justify-content: space-between;
@@ -44,15 +56,21 @@
 }
 
 .drm-avatar {
-	width: 32px;
-	height: 32px;
+	width: 40px;
+	height: 40px;
 	border-radius: 50%;
 	object-fit: cover;
 }
 
 .drm-list th.column-avatar,
 .drm-list td.column-avatar {
-	width: 40px;
+	width: 48px;
+}
+
+.drm-actions.button-group .button {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 }
 
 .drm-loading {
@@ -66,6 +84,7 @@
 	margin-right: 6px;
 }
 
+/* Responsive */
 @media (max-width: 782px) {
 	.drm-table-container table.widefat td,
 	.drm-table-container table.widefat th {
@@ -77,5 +96,9 @@
 		gap: 8px;
 		align-items: flex-start;
 	}
+
+	/* Hide less-critical columns on phones */
+	.drm-list .column-email,
+	.drm-list .column-role { display: none; }
 }
 
