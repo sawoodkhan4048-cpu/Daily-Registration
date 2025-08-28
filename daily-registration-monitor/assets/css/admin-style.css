@@ -22,10 +22,60 @@
 	color: #fff;
 }
 
+.drm-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin: 12px 0 16px;
+}
+
+.drm-toolbar {
+	margin-bottom: 10px;
+}
+
+.drm-count {
+	font-size: 14px;
+}
+
+.drm-today-date {
+	color: #555d66;
+	font-weight: normal;
+	margin-left: 6px;
+}
+
+.drm-avatar {
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.drm-list th.column-avatar,
+.drm-list td.column-avatar {
+	width: 40px;
+}
+
+.drm-loading {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	margin-top: 12px;
+}
+
+.tablenav .page-numbers {
+	margin-right: 6px;
+}
+
 @media (max-width: 782px) {
 	.drm-table-container table.widefat td,
 	.drm-table-container table.widefat th {
 		white-space: nowrap;
+	}
+
+	.drm-header {
+		flex-direction: column;
+		gap: 8px;
+		align-items: flex-start;
 	}
 }
 
